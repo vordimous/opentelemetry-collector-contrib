@@ -118,7 +118,7 @@ func TestAddToGroupedMetric(t *testing.T) {
 
 			assert.Len(t, groupedMetrics, 1)
 			for _, v := range groupedMetrics {
-				assert.Equal(t, len(tc.expectedMetricInfo), len(v.metrics))
+				assert.Len(t, v.metrics, len(tc.expectedMetricInfo))
 				assert.Equal(t, tc.expectedMetricInfo, v.metrics)
 				assert.Len(t, v.labels, 2)
 				assert.Equal(t, generateTestMetricMetadata(namespace, timestamp, logGroup, logStreamName, instrumentationLibName, tc.expectedMetricType, 0), v.metadata)
@@ -309,9 +309,10 @@ func TestAddToGroupedMetric(t *testing.T) {
 			}
 			assert.Equal(t, expectedLabels, group.labels)
 
-			if group.metadata.logGroup == "log-group-2" {
+			switch group.metadata.logGroup {
+			case "log-group-2":
 				seenLogGroup2 = true
-			} else if group.metadata.logGroup == "log-group-1" {
+			case "log-group-1":
 				seenLogGroup1 = true
 			}
 		}
@@ -441,10 +442,10 @@ func TestAddToGroupedMetric(t *testing.T) {
 		for _, v := range groupedMetrics {
 			assert.Len(t, v.metrics, 1)
 			assert.Len(t, v.labels, 2)
-			assert.Contains(t, expectedMetadata, v.metadata.groupedMetricMetadata.batchIndex)
-			assert.Equal(t, expectedMetadata[v.metadata.groupedMetricMetadata.batchIndex], v.metadata)
+			assert.Contains(t, expectedMetadata, v.metadata.batchIndex)
+			assert.Equal(t, expectedMetadata[v.metadata.batchIndex], v.metadata)
 			assert.Equal(t, expectedLabels, v.labels)
-			delete(expectedMetadata, v.metadata.groupedMetricMetadata.batchIndex)
+			delete(expectedMetadata, v.metadata.batchIndex)
 		}
 	})
 }
@@ -454,7 +455,7 @@ func TestAddKubernetesWrapper(t *testing.T) {
 		dockerObj := struct {
 			ContainerID string `json:"container_id"`
 		}{
-			ContainerID: "Container mccontainter the third",
+			ContainerID: "Container mccontainer the third",
 		}
 		expectedCreatedObj := struct {
 			ContainerName string `json:"container_name"`
@@ -469,7 +470,7 @@ func TestAddKubernetesWrapper(t *testing.T) {
 		}
 
 		inputs := make(map[string]string)
-		inputs["container_id"] = "Container mccontainter the third"
+		inputs["container_id"] = "Container mccontainer the third"
 		inputs["container"] = "container mccontainer"
 		inputs["NodeName"] = "hosty de la host"
 		inputs["PodId"] = "Le id de Pod"

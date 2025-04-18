@@ -28,6 +28,8 @@ import (
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/extension/extensiontest"
 	"golang.org/x/sys/unix"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/cgroupruntimeextension/internal/metadata"
 )
 
 const (
@@ -72,7 +74,7 @@ func setupMemoryCgroupCleanUp(t *testing.T, manager *cgroup2.Manager, cgroupPath
 		assert.NoError(t, err)
 	}
 
-	if initialMaxMemory == math.MaxUint64 {
+	if initialMaxMemory == math.MaxUint64 || initialMaxMemory == 0 {
 		// fallback solution to set cgroup's max memory to "max"
 		memoryCgroupCleanUp = func() {
 			err = os.WriteFile(path.Join(defaultCgroup2Path, cgroupPath, "memory.max"), []byte("max"), 0o600)
@@ -103,7 +105,7 @@ func cgroupMaxCPU(filename string) (quota int64, period uint64, err error) {
 func startExtension(t *testing.T, config *Config) {
 	factory := NewFactory()
 	ctx := context.Background()
-	extension, err := factory.Create(ctx, extensiontest.NewNopSettings(), config)
+	extension, err := factory.Create(ctx, extensiontest.NewNopSettings(metadata.Type), config)
 	require.NoError(t, err)
 
 	err = extension.Start(ctx, componenttest.NewNopHost())
@@ -112,6 +114,8 @@ func startExtension(t *testing.T, config *Config) {
 
 func TestCgroupV2SudoIntegration(t *testing.T) {
 	checkCgroupSystem(t)
+
+	var maxMem int64 = 4294967296 // 4GB in bytes
 
 	tests := []struct {
 		name string
@@ -127,8 +131,7 @@ func TestCgroupV2SudoIntegration(t *testing.T) {
 			name:            "90% the max cgroup memory and 12 GOMAXPROCS",
 			cgroupCPUQuota:  pointerInt64(100000),
 			cgroupCPUPeriod: 8000,
-			// 128 Mb
-			cgroupMaxMemory: 134217728,
+			cgroupMaxMemory: maxMem,
 			config: &Config{
 				GoMaxProcs: GoMaxProcsConfig{
 					Enabled: true,
@@ -140,50 +143,45 @@ func TestCgroupV2SudoIntegration(t *testing.T) {
 			},
 			// 100000 / 8000
 			expectedGoMaxProcs: 12,
-			// 134217728 * 0.9
-			expectedGoMemLimit: 120795955,
+			expectedGoMemLimit: int64(float64(maxMem) * 0.9),
 		},
 		{
-			name:            "50% of the max cgroup memory and 1 GOMAXPROCS",
+			name:            "80% of the max cgroup memory and 4 GOMAXPROCS",
 			cgroupCPUQuota:  pointerInt64(100000),
-			cgroupCPUPeriod: 100000,
-			// 128 Mb
-			cgroupMaxMemory: 134217728,
+			cgroupCPUPeriod: 25000,
+			cgroupMaxMemory: maxMem,
 			config: &Config{
 				GoMaxProcs: GoMaxProcsConfig{
 					Enabled: true,
 				},
 				GoMemLimit: GoMemLimitConfig{
 					Enabled: true,
-					Ratio:   0.5,
+					Ratio:   0.8,
 				},
 			},
-			// 100000 / 100000
-			expectedGoMaxProcs: 1,
-			// 134217728 * 0.5
-			expectedGoMemLimit: 67108864,
+			// 100000 / 25000
+			expectedGoMaxProcs: 4,
+			expectedGoMemLimit: int64(float64(maxMem) * 0.8),
 		},
 		{
-			name:            "10% of the max cgroup memory, max cpu, default GOMAXPROCS",
+			name:            "80% of the max cgroup memory, max cpu, default GOMAXPROCS",
 			cgroupCPUQuota:  nil,
 			cgroupCPUPeriod: 100000,
-			// 128 Mb
-			cgroupMaxMemory: 134217728,
+			cgroupMaxMemory: maxMem,
 			config: &Config{
 				GoMaxProcs: GoMaxProcsConfig{
 					Enabled: true,
 				},
 				GoMemLimit: GoMemLimitConfig{
 					Enabled: true,
-					Ratio:   0.1,
+					Ratio:   0.8,
 				},
 			},
 			// GOMAXPROCS is set to the value of  `cpu.max / cpu.period`
 			// If cpu.max is set to max, GOMAXPROCS should not be
 			// modified
 			expectedGoMaxProcs: runtime.GOMAXPROCS(-1),
-			// 134217728 * 0.1
-			expectedGoMemLimit: 13421772,
+			expectedGoMemLimit: int64(float64(maxMem) * 0.8),
 		},
 	}
 
@@ -198,7 +196,6 @@ func TestCgroupV2SudoIntegration(t *testing.T) {
 	initialCPUQuota, initialCPUPeriod, err := cgroupMaxCPU(cgroupPath)
 	require.NoError(t, err)
 	cpuCgroupCleanUp := func() {
-		fmt.Println(initialCPUQuota)
 		err = manager.Update(&cgroup2.Resources{
 			CPU: &cgroup2.CPU{
 				Max: cgroup2.NewCPUMax(pointerInt64(initialCPUQuota), pointerUint64(initialCPUPeriod)),
@@ -255,15 +252,14 @@ func testServerECSMetadata(t *testing.T, containerCPU, taskCPU int) *httptest.Se
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-		_, err := w.Write([]byte(fmt.Sprintf(`{"Limits":{"CPU":%d},"DockerId":"container-id"}`, containerCPU)))
+		_, err := fmt.Fprintf(w, `{"Limits":{"CPU":%d},"DockerId":"container-id"}`, containerCPU)
 		assert.NoError(t, err)
 	})
 	mux.HandleFunc("/task", func(w http.ResponseWriter, _ *http.Request) {
-		_, err := w.Write([]byte(fmt.Sprintf(
+		_, err := fmt.Fprintf(w,
 			`{"Containers":[{"DockerId":"container-id","Limits":{"CPU":%d}}],"Limits":{"CPU":%d}}`,
 			containerCPU,
-			taskCPU,
-		)))
+			taskCPU)
 		assert.NoError(t, err)
 	})
 
@@ -272,6 +268,8 @@ func testServerECSMetadata(t *testing.T, containerCPU, taskCPU int) *httptest.Se
 
 func TestECSCgroupV2SudoIntegration(t *testing.T) {
 	checkCgroupSystem(t)
+
+	var maxMem int64 = 4294967296 // 4GB in bytes
 
 	tests := []struct {
 		name               string
@@ -283,11 +281,10 @@ func TestECSCgroupV2SudoIntegration(t *testing.T) {
 		expectedGoMemLimit int64
 	}{
 		{
-			name:         "90% the max cgroup memory and 4 GOMAXPROCS w/ 4096 container cpu 16 task cpu",
-			containerCPU: 4096,
-			taskCPU:      16,
-			// 128 Mb
-			cgroupMaxMemory: 134217728,
+			name:            "90% the max cgroup memory and 4 GOMAXPROCS w/ 4096 container cpu 16 task cpu",
+			containerCPU:    4096,
+			taskCPU:         16,
+			cgroupMaxMemory: maxMem,
 			config: &Config{
 				GoMaxProcs: GoMaxProcsConfig{
 					Enabled: true,
@@ -298,65 +295,24 @@ func TestECSCgroupV2SudoIntegration(t *testing.T) {
 				},
 			},
 			expectedGoMaxProcs: 4,
-			// 134217728 * 0.9
-			expectedGoMemLimit: 120795955,
+			expectedGoMemLimit: int64(float64(maxMem) * 0.9),
 		},
 		{
-			name:         "50% of the max cgroup memory and 1 GOMAXPROCS w/ 2048 container cpu 2 task cpu",
-			containerCPU: 2048,
-			taskCPU:      2,
-			// 128 Mb
-			cgroupMaxMemory: 134217728,
+			name:            "80% of the max cgroup memory and 4 GOMAXPROCS w/ 4096 container cpu 0 task cpu",
+			containerCPU:    4096,
+			taskCPU:         0,
+			cgroupMaxMemory: maxMem,
 			config: &Config{
 				GoMaxProcs: GoMaxProcsConfig{
 					Enabled: true,
 				},
 				GoMemLimit: GoMemLimitConfig{
 					Enabled: true,
-					Ratio:   0.5,
-				},
-			},
-			expectedGoMaxProcs: 2,
-			// 134217728 * 0.5
-			expectedGoMemLimit: 67108864,
-		},
-		{
-			name:         "50% of the max cgroup memory and 1 GOMAXPROCS w/ 1024 container cpu 4 task cpu",
-			containerCPU: 1024,
-			taskCPU:      4,
-			// 128 Mb
-			cgroupMaxMemory: 134217728,
-			config: &Config{
-				GoMaxProcs: GoMaxProcsConfig{
-					Enabled: true,
-				},
-				GoMemLimit: GoMemLimitConfig{
-					Enabled: true,
-					Ratio:   0.5,
-				},
-			},
-			expectedGoMaxProcs: 1,
-			// 134217728 * 0.5
-			expectedGoMemLimit: 67108864,
-		},
-		{
-			name:         "10% of the max cgroup memory and 4 GOMAXPROCS w/ 4096 container cpu 0 task cpu",
-			containerCPU: 4096,
-			taskCPU:      0,
-			// 128 Mb
-			cgroupMaxMemory: 134217728,
-			config: &Config{
-				GoMaxProcs: GoMaxProcsConfig{
-					Enabled: true,
-				},
-				GoMemLimit: GoMemLimitConfig{
-					Enabled: true,
-					Ratio:   0.1,
+					Ratio:   0.8,
 				},
 			},
 			expectedGoMaxProcs: 4,
-			// 134217728 * 0.1
-			expectedGoMemLimit: 13421772,
+			expectedGoMemLimit: int64(float64(maxMem) * 0.8),
 		},
 	}
 

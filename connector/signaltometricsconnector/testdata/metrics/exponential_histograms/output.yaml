@@ -4,9 +4,18 @@ resourceMetrics:
         - key: resource.foo
           value:
             stringValue: foo
+        - key: signaltometrics.service.instance.id
+          value:
+            stringValue: 627cc493-f310-47de-96bd-71410b7dec09
+        - key: signaltometrics.service.name
+          value:
+            stringValue: signaltometrics
+        - key: signaltometrics.service.namespace
+          value:
+            stringValue: test
     scopeMetrics:
       - metrics:
-          - description: An exponential histogram created from gague values
+          - description: An exponential histogram created from gauge values
             exponentialHistogram:
               aggregationTemporality: 1
               dataPoints:

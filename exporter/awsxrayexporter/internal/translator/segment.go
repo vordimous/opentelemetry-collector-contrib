@@ -169,7 +169,7 @@ func MakeDependencySubsegmentForLocalRootDependencySpan(span ptrace.Span, resour
 
 func MakeServiceSegmentForLocalRootDependencySpan(span ptrace.Span, resource pcommon.Resource, indexedAttrs []string, indexAllAttrs bool, logGroupNames []string, skipTimestampValidation bool, serviceSegmentID pcommon.SpanID) (*awsxray.Segment, error) {
 	// We always create a segment for the service
-	var serviceSpan ptrace.Span = ptrace.NewSpan()
+	serviceSpan := ptrace.NewSpan()
 	span.CopyTo(serviceSpan)
 
 	// Set the span id to the one internally generated
@@ -642,7 +642,7 @@ func makeXRayAttributes(attributes map[string]pcommon.Value, resource pcommon.Re
 	}
 
 	if storeResource {
-		resource.Attributes().Range(func(key string, value pcommon.Value) bool {
+		for key, value := range resource.Attributes().All() {
 			key = "otel.resource." + key
 			annoVal := annotationValue(value)
 			indexed := indexAllAttrs || indexedKeys[key]
@@ -655,8 +655,7 @@ func makeXRayAttributes(attributes map[string]pcommon.Value, resource pcommon.Re
 					defaultMetadata[key] = metaVal
 				}
 			}
-			return true
-		})
+		}
 	}
 
 	if indexAllAttrs {
@@ -739,7 +738,7 @@ func fixSegmentName(name string) string {
 	return name
 }
 
-// fixAnnotationKey removes any invalid characters from the annotaiton key.  AWS X-Ray defines
+// fixAnnotationKey removes any invalid characters from the annotation key.  AWS X-Ray defines
 // the list of valid characters here:
 // https://docs.aws.amazon.com/xray/latest/devguide/xray-api-segmentdocuments.html
 func fixAnnotationKey(key string) string {
